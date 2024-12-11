@@ -1,24 +1,22 @@
 package service
 
 import (
-	"Go-routine-4595/oem-converter/adapters/gateway/mqtt"
-	"Go-routine-4595/oem-converter/model"
 	"context"
 	"encoding/json"
+	"github.com/Go-routine-4595/oem-converter/model"
 	"github.com/rs/zerolog"
 	"os"
-	"runtime"
 	"sync"
 	"time"
 )
 
-type IController interface {
-	GetMessage() *model.Item
-}
-
 type IGateway interface {
 	Forward(b []byte) error
 	Disconnect()
+}
+
+type IController interface {
+	GetMessage() *model.Item
 }
 
 type Service struct {
@@ -26,47 +24,34 @@ type Service struct {
 	gateWay    []IGateway
 	logger     zerolog.Logger
 	key        string
+	wg         *sync.WaitGroup
 }
 
 // NewService initializes a new Service instance with the specified IController, MqttConf configuration, and log level.
 // It sets up the logging, creates MQTT gateways for each CPU core, and returns the created Service instance.
-func NewService(c IController, conf mqtt.MqttConf, logL int) *Service {
+func NewService(c IController, key string, logL int, wg *sync.WaitGroup) *Service {
 	var (
-		ncpu int
-		g    []IGateway
-		ctx  = context.Background()
-		err  error
-		srv  *Service
+		srv *Service
 	)
 
-	if conf.Key == "" {
+	if key == "" {
 		srv.logger.Error().Msg("Key is empty. Exiting application.")
 		os.Exit(1)
 	}
-	srv = &Service{
+	return &Service{
 		logger:     zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).Level(zerolog.InfoLevel+zerolog.Level(logL)).With().Timestamp().Int("pid", os.Getpid()).Logger(),
 		controller: c,
-		key:        conf.Key,
+		key:        key,
+		wg:         wg,
 	}
-	ncpu = runtime.NumCPU()
+}
 
-	srv.logger.Info().Int("ncpu", ncpu).Msg("Number of CPUs")
-	srv.logger.Info().Msgf("Starting service server: %s, topic: %s \n", conf.Connection, conf.Topic)
-
-	g = make([]IGateway, ncpu)
-	for i := 0; i < ncpu; i++ {
-		g[i], err = mqtt.NewMqtt(conf, logL, ctx)
-		if err != nil {
-			srv.logger.Error().Err(err).Msg("Error creating gateway")
-		}
-	}
-	srv.gateWay = g
-
-	return srv
+func (s *Service) Gateway(gtw []IGateway) {
+	s.gateWay = gtw
 }
 
 // Start initiates the Service by launching a goroutine that continuously processes and forwards messages until the context is canceled.
-func (s *Service) Start(ctx context.Context, wg *sync.WaitGroup) {
+func (s *Service) Start(ctx context.Context) {
 	var (
 		i     *model.Item
 		n     time.Duration
@@ -76,15 +61,20 @@ func (s *Service) Start(ctx context.Context, wg *sync.WaitGroup) {
 		l     = len(s.gateWay)
 	)
 
-	wg.Add(1)
+	s.wg.Add(1)
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				for g := range s.gateWay {
-					s.gateWay[g].Disconnect()
-				}
-				wg.Done()
+				//for g := range s.gateWay {
+				//	s.gateWay[g].Disconnect()
+				//}
+				time.Sleep(500 * time.Millisecond)
+				s.logger.Warn().Msgf(
+					"Service stopped. Received %d messages",
+					count,
+				)
+				s.wg.Done()
 				return
 			default:
 

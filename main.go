@@ -1,24 +1,28 @@
 package main
 
 import (
-	"Go-routine-4595/oem-converter/adapters/controller"
-	"Go-routine-4595/oem-converter/adapters/gateway/mqtt"
-	"Go-routine-4595/oem-converter/service"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Go-routine-4595/oem-converter/adapters/controller"
+	event_hub "github.com/Go-routine-4595/oem-converter/adapters/gateway/event-hub"
+	"github.com/Go-routine-4595/oem-converter/adapters/gateway/mqtt"
+	"github.com/Go-routine-4595/oem-converter/service"
+	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
-	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 )
 
 const (
-	configOpt   = "/opt/oem-util/config.yaml"
-	configLocal = "config.yaml"
-	version     = 0.1
+	configOpt              = "/opt/oem-util/config.yaml"
+	configLocal            = "config.yaml"
+	version                = 0.2
+	connectionTypeMqtt     = "mqtt"
+	connectionTypeEventHub = "event-hub"
 )
 
 var CompileDate string
@@ -33,9 +37,16 @@ var logLevelStrint map[int]string = map[int]string{
 	5:  "disabled",
 }
 
+type AdapterConfig struct {
+	Connection string `yaml:"Connection"`
+	Topic      string `yaml:"Topic"`
+	Key        string `yaml:"Key"`
+	Type       string `yaml:"Type"`
+}
+
 type Config struct {
 	Controller controller.MqttConf `yaml:"ControllerConfig"`
-	Gateway    mqtt.MqttConf       `yaml:"AdapterConfig"`
+	Gateway    AdapterConfig       `yaml:"AdapterConfig"`
 	LogLevel   int                 `yaml:"LogLevel"`
 }
 
@@ -49,6 +60,9 @@ func main() {
 		wg     *sync.WaitGroup
 		cancel context.CancelFunc
 		err    error
+		ncpu   int
+		gtw    []service.IGateway
+		typeG  string
 	)
 
 	fmt.Printf("oem converter Version: %.2f \t CompileDate: %s \t LogLevel: %s \n", version, CompileDate, logLevelStrint[conf.LogLevel])
@@ -80,8 +94,49 @@ func main() {
 	ctx, cancel = context.WithCancel(context.Background())
 
 	c = controller.NewController(conf.Controller, ctx, conf.LogLevel, wg)
-	svc = service.NewService(c, conf.Gateway, conf.LogLevel)
-	svc.Start(ctx, wg)
+	svc = service.NewService(c, conf.Gateway.Key, conf.LogLevel, wg)
+
+	ncpu = runtime.NumCPU()
+	gtw = make([]service.IGateway, ncpu)
+
+	typeG, err = AdapterFromConnection(conf.Gateway)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Error creating gateway")
+	}
+
+	if typeG == connectionTypeEventHub {
+		var ehConfig event_hub.Config
+
+		ehConfig.Connection = conf.Gateway.Connection
+		ehConfig.NameSpace = conf.Gateway.Topic
+		ehConfig.LogLevel = conf.LogLevel
+
+		for i := 0; i < ncpu; i++ {
+			gtw[i], err = event_hub.NewEventHub(ehConfig, ctx, wg)
+			if err != nil {
+				log.Fatal().Err(err).Msg("Error creating gateway")
+			}
+		}
+		svc.Gateway(gtw)
+	}
+
+	if typeG == connectionTypeMqtt {
+		var mqttConfig mqtt.Config
+
+		mqttConfig.Connection = conf.Gateway.Connection
+		mqttConfig.Topic = conf.Gateway.Topic
+		mqttConfig.Key = conf.Gateway.Key
+
+		for i := 0; i < ncpu; i++ {
+			gtw[i], err = mqtt.NewMqtt(mqttConfig, ctx)
+			if err != nil {
+				log.Fatal().Err(err).Msg("Error creating gateway")
+			}
+		}
+		svc.Gateway(gtw)
+	}
+
+	svc.Start(ctx)
 
 	// Graceful shutdown
 	sigs := make(chan os.Signal, 1)
@@ -89,8 +144,18 @@ func main() {
 	<-sigs
 	cancel()
 	wg.Wait()
-	log.Println("Shutting down")
+	log.Info().Msg("Shutting down")
 	os.Exit(0)
+}
+
+func AdapterFromConnection(conf AdapterConfig) (string, error) {
+	if conf.Type == connectionTypeMqtt {
+		return connectionTypeMqtt, nil
+	}
+	if conf.Type == connectionTypeEventHub {
+		return connectionTypeEventHub, nil
+	}
+	return "", errors.New("invalid connection string")
 }
 
 func openConfigFile(s string) (Config, error) {

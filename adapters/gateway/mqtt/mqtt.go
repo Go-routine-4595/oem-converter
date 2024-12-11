@@ -12,15 +12,15 @@ import (
 	"time"
 )
 
-type MqttConf struct {
-	Connection string `yaml:"Connection"`
-	Topic      string `yaml:"Topic"`
-	Key        string `yaml:"Key"`
+type Config struct {
+	Connection string
+	Topic      string
+	Key        string
+	LogLevel   int
 }
 
 type Mqtt struct {
 	Topic    string
-	MgtUrl   string
 	logger   zerolog.Logger
 	opt      *pmqtt.ClientOptions
 	ClientID uuid.UUID
@@ -30,18 +30,17 @@ type Mqtt struct {
 // NewMqtt initializes a new Mqtt instance with given configuration, log level, and context.
 // It sets up the logger, client options, and handles connection and reconnection behaviors.
 // It also handles graceful disconnection upon context cancellation and returns the created Mqtt instance or error.
-func NewMqtt(conf MqttConf, logl int, ctx context.Context) (*Mqtt, error) {
+func NewMqtt(conf Config, ctx context.Context) (*Mqtt, error) {
 	var (
 		err error
 		l   zerolog.Logger
 		cid uuid.UUID
 	)
 
-	l = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).Level(zerolog.InfoLevel+zerolog.Level(logl)).With().Timestamp().Int("pid", os.Getpid()).Logger()
+	l = zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).Level(zerolog.InfoLevel+zerolog.Level(conf.LogLevel)).With().Timestamp().Int("pid", os.Getpid()).Logger()
 	cid = uuid.NewV4()
 	c := &Mqtt{
 		Topic:    conf.Topic,
-		MgtUrl:   conf.Connection,
 		logger:   l,
 		ClientID: cid,
 		opt: pmqtt.NewClientOptions().
@@ -62,7 +61,7 @@ func NewMqtt(conf MqttConf, logl int, ctx context.Context) (*Mqtt, error) {
 
 	go func() {
 		<-ctx.Done()
-		c.client.Disconnect(250)
+		c.client.Disconnect(500)
 		c.logger.Warn().Msg("Mqtt disconnect")
 	}()
 
