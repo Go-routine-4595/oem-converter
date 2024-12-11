@@ -71,7 +71,7 @@ func (s *Service) Start(ctx context.Context, wg *sync.WaitGroup) {
 		i     *model.Item
 		n     time.Duration
 		err   error
-		b     []byte
+		b     [][]byte
 		count int
 		l     = len(s.gateWay)
 	)
@@ -96,21 +96,46 @@ func (s *Service) Start(ctx context.Context, wg *sync.WaitGroup) {
 			}
 			s.logger.Debug().Msgf("Received message: %s", i.Data)
 
-			b, err = processMsg(i.Data, s.key)
+			b, err = splitMessage(i.Data)
 			if err != nil {
 				s.logger.Error().Err(err).Msg("Error processing message")
 
 			} else {
-				go s.gateWay[count%l].Forward(b)
+				for j := 0; j < len(b); j++ {
 
-				n = time.Now().Sub(i.Rcv)
-				s.logger.Info().Int("count", count).Msgf("Forwarded message: in %d", n.Milliseconds())
-				count++
+					go s.gateWay[count%l].Forward(b[j])
+
+					n = time.Now().Sub(i.Rcv)
+					s.logger.Info().Int("count", count).Msgf("Forwarded message: in %d", n.Milliseconds())
+					count++
+				}
 			}
 
 		}
 	}()
 
+}
+
+func splitMessage(b []byte) ([][]byte, error) {
+	var (
+		data []map[string]interface{}
+		err  error
+		out  [][]byte
+	)
+	data = make([]map[string]interface{}, 0)
+	err = json.Unmarshal(b, &data)
+	if err != nil {
+		return [][]byte{}, err
+	}
+
+	out = make([][]byte, len(data))
+	for i := 0; i < len(data); i++ {
+		out[i], err = json.Marshal(data[i])
+		if err != nil {
+			return [][]byte{}, err
+		}
+	}
+	return out, nil
 }
 
 // processMsg takes a JSON byte slice and a key string, unmarshals the JSON, retrieves the value for the key, and returns its JSON encoding.

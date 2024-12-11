@@ -1,9 +1,9 @@
 ControllerConfig:
-  Connection: "ssl://ec2-54-221-30-72.compute-1.amazonaws.com:8883"
+  Connection: "ssl://backend.christophe.engineering:8883"
   Topic: "oem-alarms/test1"
 
 AdapterConfig:
-  Connection: "ssl://ec2-54-221-30-72.compute-1.amazonaws.com:8883"
+  Connection: "ssl://backend.christophe.engineering:8883"
   Topic: "oem-alarms/test3"
   Key: "result"
 
